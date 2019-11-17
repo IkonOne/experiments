@@ -1,3 +1,4 @@
+import ds
 import open3d as o3d
 import numpy as np
 import heapq
@@ -7,14 +8,17 @@ import time, datetime
 # RAD_NEIGHBORS = 0.12
 # MIN_NEIGHBORS = 5 # used for outlier removal
 # MAX_NEIGHBORS = 50
-DOWN_SAMPLE_VOXEL_SIZE = 0.01
-NUM_NEIGHBORS = 32
-CORNER_ALHPA = 0.75
-TAU = 1.5
+DOWN_SAMPLE_VOXEL_SIZE = 0.0045
+NUM_NEIGHBORS = 12
+CORNER_ALHPA = 0.2
+TAU_MIN = 1.0
+TAU_MAX = 1.5
 
 class PCDPointClassifier:
-    def __init__(self, pcd):
+    def __init__(self, pcd : o3d.geometry.PointCloud):
         self.pcd = pcd
+        self.line_set = o3d.geometry.LineSet()
+        self.line_set.points = self.pcd.points
         self.kdtree = o3d.geometry.KDTreeFlann(pcd)
 
         points = np.asarray(self.pcd.points)
@@ -25,8 +29,13 @@ class PCDPointClassifier:
 
         start_time = time.time()
         self.calc_prerequisites()
-        end_time = time.time() - start_time
-        print('Elapsed Time: {}'.format(datetime.timedelta(seconds=end_time)))
+        elapsed_time = time.time() - start_time
+        print('Elapsed Time [calc_prerequisites]: {}'.format(datetime.timedelta(seconds=elapsed_time)))
+
+        start_time = time.time()
+        self.build_debug_lineset()
+        elapsed_time = time.time() - start_time
+        print('Elapsed Time [build_debug_lineset]: {}'.format(datetime.timedelta(seconds=elapsed_time)))
 
     def calc_prerequisites(self):
         points = np.asarray(self.pcd.points)
@@ -88,6 +97,47 @@ class PCDPointClassifier:
                     self.w_corner[n_indices]
                 )
             )
+
+    def build_debug_lineset(self):
+        points = np.asarray(self.pcd.points)
+        neighbors = points[self.neighbors[:,]]
+        prio_queue = [];
+        disjoint =  ds.disjoint_set(points.shape[0])
+        graph = ds.graph()
+
+        for p in np.arange(points.shape[0]):
+            n_indices = self.neighbors[p]
+            for n in np.arange(n_indices.shape[0]):
+                weight = self.w_edge[p][n]
+                if weight > TAU_MIN and weight < TAU_MAX:
+                    prio_queue.append((weight, p, n_indices[n]))
+        
+        heapq.heapify(prio_queue)
+
+        count = 0
+        while len(prio_queue) > 0:
+            count += 1
+            if count % 100 == 0:
+                print(len(prio_queue))
+
+            edge = heapq.heappop(prio_queue)
+            if disjoint.union(edge[1], edge[2]) or graph.path_is_longer(edge[1], edge[2], 200):
+                graph.add_edge(edge[1], edge[2])
+        
+        lines = []
+        num_items = len(graph.edges)
+        count = 0
+        for p in graph.edges:
+
+            count += 1
+            if count % 1000 == 0:
+                print("{}/{}".format(count, num_items))
+
+            for q in graph.edges[p]:
+                if p > q:
+                    lines.append((p, q))
+        
+        self.line_set.lines = o3d.utility.Vector2iVector(lines)
          
     def colorize(self):
         points = np.asarray(self.pcd.points)
@@ -98,11 +148,14 @@ class PCDPointClassifier:
             c = min(self.w_edge[i]) - 0.6
             colors[i][0] = c
    
-    def visualize(self, draw_pcd=True):
+    def visualize(self, draw_pcd=True, draw_lines=True):
         toDraw = []
 
         if draw_pcd:
             toDraw.append(self.pcd)
+
+        if draw_lines:
+            toDraw.append(self.line_set)
         
         o3d.visualization.draw_geometries(toDraw)
 
@@ -123,7 +176,10 @@ if __name__ == '__main__':
     # classifier.build_feature_lines()
 
     down_pcd = pcd.voxel_down_sample(voxel_size=DOWN_SAMPLE_VOXEL_SIZE)
-    print(len(down_pcd.points))
-    classifier = PCDPointClassifier(down_pcd)
-    classifier.colorize()
-    classifier.visualize()
+    radii = o3d.utility.DoubleVector([DOWN_SAMPLE_VOXEL_SIZE * 1.5] * 2)
+    tris = o3d.geometry.TriangleMesh.create_from_point_cloud_ball_pivoting(down_pcd, radii)
+    o3d.visualization.draw_geometries([down_pcd, tris])
+    # print(len(down_pcd.points))
+    # classifier = PCDPointClassifier(down_pcd)
+    # classifier.colorize()
+    # classifier.visualize()
