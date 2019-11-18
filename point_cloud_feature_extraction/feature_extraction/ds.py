@@ -25,24 +25,46 @@ class disjoint_set:
         return True
 
 class graph:
-    def __init__(self):
-        self.edges = dict()
+    def __init__(self, size = 10):
+        self.edges = [None] * size
 
     def add_edge(self, lhs, rhs):
-        if lhs not in self.edges:
+        if self.edges[lhs] == None:
             self.edges[lhs] = set()
         
-        if rhs not in self.edges:
+        if self.edges[rhs] == None:
             self.edges[rhs] = set()
         
         self.edges[lhs].add(rhs)
         self.edges[rhs].add(lhs)
     
     def path_is_longer(self, lhs, rhs, length):
-        return len(self.bfs(lhs, rhs)) > length
+        if self.edges[lhs] == None or self.edges[rhs] == None:
+            return False
+        
+        if rhs in self.edges[lhs]:
+            return 2 > length
+
+        visited = {}
+        deq = collections.deque([lhs])
+        while len(deq) > 0:
+            p = deq.popleft()
+            if p == rhs:
+                path_length = 0
+                while p != lhs:
+                    p = visited[p]
+                    path_length += 1
+                return path_length > length
+            
+            for q in self.edges[p]:
+                if q not in visited:
+                    visited[q] = p
+                    deq.append(q)
+            
+        return False
     
     def bfs(self, lhs, rhs):
-        if lhs not in self.edges or rhs not in self.edges:
+        if self.edges[lhs] == None or self.edges[rhs] == None:
             return []
 
         if rhs in self.edges[lhs]:
