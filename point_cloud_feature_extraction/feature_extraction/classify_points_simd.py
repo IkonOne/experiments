@@ -9,11 +9,11 @@ import time, datetime
 # MIN_NEIGHBORS = 5 # used for outlier removal
 # MAX_NEIGHBORS = 50
 
-DOWN_SAMPLE_VOXEL_SIZE = 0.02
+DOWN_SAMPLE_VOXEL_SIZE = 0.04
 NUM_NEIGHBORS = 16
-CORNER_ALHPA = 0.5
+CORNER_ALHPA = 0.8
 TAU_MIN = 0.0
-TAU_MAX = 1.0
+TAU_MAX = 2
 
 class PCDPointClassifier:
     def __init__(self, pcd : o3d.geometry.PointCloud):
@@ -47,10 +47,10 @@ class PCDPointClassifier:
 
         # pg. 3, eq. 3
         corr_mats = np.zeros((points.shape[0], 3, 3))
-        local_neighbors = neighbors - centroids.reshape((len(points), 1, 3))
+        local_neighbors_centroids = neighbors - centroids.reshape((len(points), 1, 3))
         for i in np.arange(points.shape[0]):
             for n in np.arange(neighbors[i].shape[0]):
-                corr_mats[i] += np.outer(local_neighbors[i][n], local_neighbors[i][n])
+                corr_mats[i] += np.outer(local_neighbors_centroids[i][n], local_neighbors_centroids[i][n])
             corr_mats[i] /= NUM_NEIGHBORS
 
         eigvals, eigvecs = np.linalg.eig(corr_mats)
@@ -61,20 +61,20 @@ class PCDPointClassifier:
         
         self.eigvecs = eigvecs
 
-        # pg. 4, eq. 4,5
-        local_points = points - centroids
-        point_centroid_distances = np.zeros(points.shape[0])
-        avg_neighbor_dist = np.zeros(points.shape[0]) #pg. 3, eq. 1
+        # pg. 4, eq. 1,4,5
+        local_points = points - centroids # p - c_i
+        point_centroid_distances = np.zeros(points.shape[0]) # d
+        avg_neighbor_dist = np.zeros(points.shape[0]) # mu_i
         for i in np.arange(points.shape[0]):
-            # point_centroid_distances[i] = np.sqrt(np.abs(np.vdot(eigvecs[i,0], local_points[i])))
-            point_centroid_distances[i] += np.linalg.norm([eigvecs[i, 0], local_points[i]])
+            point_centroid_distances[i] += abs(np.vdot(local_points[i], eigvecs[i, 0]))
 
             for n in np.arange(neighbors[i].shape[0]):
-                avg_neighbor_dist[i] += np.sqrt(np.vdot(local_neighbors[i][n], local_neighbors[i][n]))
+                avg_neighbor_dist[i] += np.linalg.norm(points[i] - neighbors[i][n])
             avg_neighbor_dist[i] /= NUM_NEIGHBORS
-
-        self.w_curvature = 2 * point_centroid_distances / (avg_neighbor_dist ** 2)
-        self.w_curvature = 1 - (self.w_curvature / max(self.w_curvature))
+        
+        self.w_curvature = 2 * point_centroid_distances / np.power(avg_neighbor_dist, 2)
+        max_curvature = max(self.w_curvature)
+        self.w_curvature = 1 - (self.w_curvature / max_curvature)
 
         # pg. 4, eq. 6
         crease = np.maximum(
@@ -123,12 +123,10 @@ class PCDPointClassifier:
                     prio_queue.append((weight, p, n_indices[n]))
         
         heapq.heapify(prio_queue)
+        print("len(prio_queue) = {}".format(len(prio_queue)))
 
         count = 0
         while len(prio_queue) > 0:
-            count += 1
-            if count % 1000 == 0:
-                print(len(prio_queue))
 
             edge = heapq.heappop(prio_queue)
             if disjoint.union(edge[1], edge[2]) or graph.path_is_longer(edge[1], edge[2], 200):
@@ -136,13 +134,7 @@ class PCDPointClassifier:
         
         lines = []
         num_items = len(graph.edges)
-        count = 0
         for p in range(0, len(graph.edges)):
-
-            count += 1
-            if count % 1000 == 0:
-                print("{}/{}".format(count, num_items))
-
             if graph.edges[p] is None:
                 continue
             for q in graph.edges[p]:
@@ -163,7 +155,7 @@ class PCDPointClassifier:
             # c = 1 - self.v_crease[i]
             # c = 1 - self.w_corner[i]
             # c = 1 - np.min(self.w_edge[i])
-            c = 1 - np.max(self.w_edge[i])
+            c = 1 - np.min(self.w_edge[i])
             colors[i] = [c, 0, 0]
   
     def visualize(self, draw_pcd=True, draw_lines=True, add_geoms=[]):
@@ -187,7 +179,7 @@ if __name__ == '__main__':
     # ])
 
     box : o3d.geometry.TriangleMesh = o3d.geometry.TriangleMesh.create_box()
-    pcd = box.sample_points_poisson_disk(15000)
+    pcd = box.sample_points_uniformly(20000)
 
     inner_box = o3d.geometry.TriangleMesh.create_box(0.95, 0.95, 0.95)
     inner_box.translate([0.025] * 3)
